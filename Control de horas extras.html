@@ -55,13 +55,13 @@ details{color:var(--mute);font-size:.85rem;margin-top:8px}
   <section id="app" class="hide">
     <div class="cfg">
       <label>Empleado<select id="emp"></select></label>
-      <label>Hora de corte<input type="time" id="cut" value="17:00"></label>
+      <label>Hora de corte<input type="time" id="cut" value="16:00"></label>
       <label>Tolerancia (min)<input type="number" id="tol" value="0" min="0" max="120" style="width:90px"></label>
     </div>
     <div class="stats" id="stats"></div>
 
     <div class="card">
-      <h2>Lunes a viernes: marcas después de las <span id="cutLbl">17:00</span></h2>
+      <h2>Lunes a viernes: marcas después de las <span id="cutLbl">16:00</span></h2>
       <div class="wrap" id="wk"></div>
     </div>
     <div class="card">
@@ -123,8 +123,8 @@ async function load(files){
 
 function render(){
   const e=data[$('emp').value]; if(!e) return;
-  const cut=toSec($('cut').value||'17:00')+(+$('tol').value||0)*60;
-  const base=toSec($('cut').value||'17:00');
+  const cut=toSec($('cut').value||'16:00')+(+$('tol').value||0)*60;
+  const base=toSec($('cut').value||'16:00');
   $('cutLbl').textContent=$('cut').value;
   const days={};
   for(const p of e.punches.values()) (days[p.d]||(days[p.d]=[])).push(p);
