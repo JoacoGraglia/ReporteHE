@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Control de horas extras</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f6f5f1;--card:#fff;--ink:#1d2327;--mute:#69737a;--line:#e3e1da;--acc:#0f6b5c;--acc2:#b4521b;--accbg:#e4f1ee;--warn:#fff3e0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16191b;--card:#1e2225;--ink:#e8eaeb;--mute:#8f999f;--line:#2e3438;--acc:#4fc1ad;--acc2:#f0955c;--accbg:#1b3330;--warn:#3a2b1a}}
+:root[data-theme="dark"]{--bg:#16191b;--card:#1e2225;--ink:#e8eaeb;--mute:#8f999f;--line:#2e3438;--acc:#4fc1ad;--acc2:#f0955c;--accbg:#1b3330;--warn:#3a2b1a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 56px}
+h1{font-size:1.5rem;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:1.05rem;margin:0 0 12px}
+.sub{color:var(--mute);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:28px 16px;text-align:center;cursor:pointer;background:var(--card);transition:.15s}
+.drop.over,.drop:hover{border-color:var(--acc);background:var(--accbg)}
+.drop b{display:block;font-size:1.05rem}.drop span{color:var(--mute);font-size:.9rem}
+.cfg{display:flex;flex-wrap:wrap;gap:16px;align-items:end;margin:16px 0}
+label{display:flex;flex-direction:column;font-size:.8rem;color:var(--mute);gap:4px}
+input,select{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.stat small{color:var(--mute);display:block;font-size:.78rem}
+.stat strong{font-size:1.4rem;font-variant-numeric:tabular-nums}
+.stat.main{background:var(--accbg);border-color:transparent}.stat.main strong{color:var(--acc)}
+.wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
+td.x{font-weight:600;color:var(--acc2)}
+tfoot td{font-weight:700;border-bottom:0;background:var(--accbg)}
+.tag{background:var(--warn);color:var(--acc2);border-radius:6px;padding:1px 7px;font-size:.75rem}
+.empty{color:var(--mute);padding:8px 0}
+details{color:var(--mute);font-size:.85rem;margin-top:8px}
+.hide{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>Control de horas extras</h1>
+  <p class="sub">Cargá el reporte de marcaciones (.xls / .xlsx). Entre semana cuentan las horas desde la hora de corte; los sábados cuenta todo el tiempo trabajado.</p>
+
+  <div class="drop" id="drop" tabindex="0">
+    <b>Arrastrá los reportes acá o hacé clic para elegirlos</b>
+    <span>Podés cargar varios empleados a la vez. Todo se procesa en tu navegador.</span>
+    <input type="file" id="file" accept=".xls,.xlsx,.csv" multiple class="hide">
+  </div>
+  <div id="msg" class="empty"></div>
+
+  <section id="app" class="hide">
+    <div class="cfg">
+      <label>Empleado<select id="emp"></select></label>
+      <label>Hora de corte<input type="time" id="cut" value="17:00"></label>
+      <label>Tolerancia (min)<input type="number" id="tol" value="0" min="0" max="120" style="width:90px"></label>
+    </div>
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <h2>Lunes a viernes: marcas después de las <span id="cutLbl">17:00</span></h2>
+      <div class="wrap" id="wk"></div>
+    </div>
+    <div class="card">
+      <h2>Sábados (todas las horas son extra)</h2>
+      <div class="wrap" id="sat"></div>
+    </div>
+    <div class="card" id="note"></div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const DIAS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+const $=id=>document.getElementById(id);
+const data={}; // nombre -> {punches:Map(raw->{d,s,raw}), bad:[]}
+
+function fmtDur(s){
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60);
+  if(!h&&!m) return s+' s';
+  return (h?h+' h ':'')+(m||!h?m+' min':'').trim();
+}
+const fmtDate=d=>d.split('-').reverse().join('/');
+const dow=d=>{const [y,m,x]=d.split('-').map(Number);return new Date(Date.UTC(y,m-1,x)).getUTCDay()};
+const toSec=t=>{const [h,m,s]=t.split(':').map(Number);return h*3600+m*60+(s||0)};
+
+async function load(files){
+  $('msg').textContent='Procesando…';
+  try{
+    for(const f of files){
+      const wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:false});
+      for(const name of wb.SheetNames){
+        const rows=XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,raw:false,defval:'',dateNF:'yyyy-mm-dd hh:mm:ss'});
+        const hdr=rows[0].map(c=>String(c).trim().toLowerCase());
+        const iN=hdr.indexOf('nombre')>=0?hdr.indexOf('nombre'):3;
+        const iF=hdr.findIndex(h=>h.startsWith('fecha'))>=0?hdr.findIndex(h=>h.startsWith('fecha')):4;
+        const iO=hdr.indexOf('operación')>=0?hdr.indexOf('operación'):6;
+        const iD=hdr.findIndex(h=>h.startsWith('descripci'))>=0?hdr.findIndex(h=>h.startsWith('descripci')):7;
+        for(const r of rows.slice(1)){
+          const m=String(r[iF]).trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/);
+          if(!m) continue;
+          const nm=String(r[iN]).trim()||'Sin nombre';
+          const e=data[nm]||(data[nm]={punches:new Map(),bad:[]});
+          const raw=m[1]+' '+m[2];
+          const invalid=/eliminar/i.test(r[iO])||/inv[aá]lid/i.test(r[iD]);
+          if(invalid){ if(!e.bad.includes(raw)) e.bad.push(raw); }
+          else e.punches.set(raw,{d:m[1],s:toSec(m[2]),t:m[2].length==5?m[2]+':00':m[2]});
+        }
+      }
+    }
+    const names=Object.keys(data);
+    if(!names.length){$('msg').textContent='No encontré marcaciones en el archivo. Revisá que tenga la columna "Fecha/Hora".';return}
+    const cur=$('emp').value;
+    $('emp').innerHTML=names.sort().map(n=>`<option>${n}</option>`).join('');
+    if(names.includes(cur)) $('emp').value=cur;
+    $('emp').parentElement.classList.toggle('hide',names.length<2);
+    $('msg').textContent=''; $('app').classList.remove('hide'); render();
+  }catch(err){$('msg').textContent='No pude leer el archivo: '+err.message}
+}
+
+function render(){
+  const e=data[$('emp').value]; if(!e) return;
+  const cut=toSec($('cut').value||'17:00')+(+$('tol').value||0)*60;
+  const base=toSec($('cut').value||'17:00');
+  $('cutLbl').textContent=$('cut').value;
+  const days={};
+  for(const p of e.punches.values()) (days[p.d]||(days[p.d]=[])).push(p);
+  const wk=[],sat=[];
+  for(const d of Object.keys(days).sort()){
+    const ps=days[d].sort((a,b)=>a.s-b.s), w=dow(d);
+    if(w>=1&&w<=5){
+      const last=ps[ps.length-1];
+      if(last.s>cut) wk.push({d,w,t:last.t,x:last.s-base});
+    }else if(w===6){
+      const a=ps[0],b=ps[ps.length-1];
+      sat.push({d,a:a.t,b:b.t,n:ps.length,x:ps.length>1?b.s-a.s:0});
+    }
+  }
+  const tw=wk.reduce((s,r)=>s+r.x,0), ts=sat.reduce((s,r)=>s+r.x,0);
+  $('stats').innerHTML=
+    `<div class="stat"><small>Días con extra (L–V)</small><strong>${wk.length}</strong></div>
+     <div class="stat"><small>Extra entre semana</small><strong>${fmtDur(tw)}</strong></div>
+     <div class="stat"><small>Sábados trabajados</small><strong>${sat.length}</strong></div>
+     <div class="stat"><small>Horas en sábado</small><strong>${fmtDur(ts)}</strong></div>
+     <div class="stat main"><small>Total horas extra</small><strong>${fmtDur(tw+ts)}</strong></div>`;
+  $('wk').innerHTML=wk.length?`<table><thead><tr><th>Fecha</th><th>Día</th><th>Hora de marcada</th><th>Tiempo extra</th></tr></thead><tbody>${
+    wk.map(r=>`<tr><td>${fmtDate(r.d)}</td><td>${DIAS[r.w]}</td><td>${r.t}</td><td class="x">${fmtDur(r.x)}</td></tr>`).join('')
+  }</tbody><tfoot><tr><td colspan="3">Total entre semana</td><td>${fmtDur(tw)}</td></tr></tfoot></table>`
+    :'<div class="empty">No hay marcas después de la hora de corte.</div>';
+  $('sat').innerHTML=sat.length?`<table><thead><tr><th>Fecha</th><th>Ingreso</th><th>Egreso</th><th>Horas trabajadas</th></tr></thead><tbody>${
+    sat.map(r=>`<tr><td>${fmtDate(r.d)}</td><td>${r.a}</td><td>${r.n>1?r.b:'—'}</td><td class="x">${r.n>1?fmtDur(r.x):'<span class="tag">Una sola marca, revisar</span>'}</td></tr>`).join('')
+  }</tbody><tfoot><tr><td colspan="3">Total sábados</td><td>${fmtDur(ts)}</td></tr></tfoot></table>`
+    :'<div class="empty">No hay marcas en sábado.</div>';
+  const from=Object.keys(days).sort();
+  $('note').innerHTML=`<small style="color:var(--mute)">Período: ${from.length?fmtDate(from[0])+' al '+fmtDate(from[from.length-1]):'—'} · ${e.punches.size} marcas válidas.
+    Entre semana se toma la última marca del día; el tiempo extra se mide desde ${$('cut').value} exacto.${+$('tol').value?` Se ignoran marcas dentro de los ${$('tol').value} min de tolerancia.`:''}</small>`+
+    (e.bad.length?`<details><summary>${e.bad.length} marcas inválidas ignoradas (operación "Eliminar")</summary>${e.bad.sort().map(b=>fmtDate(b.slice(0,10))+' '+b.slice(11)).join(' · ')}</details>`:'');
+}
+
+const drop=$('drop'),inp=$('file');
+drop.onclick=()=>inp.click();
+drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' ')inp.click()};
+inp.onchange=()=>{load([...inp.files]);inp.value=''};
+['dragenter','dragover'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',e=>load([...e.dataTransfer.files]));
+['emp','cut','tol'].forEach(i=>$(i).addEventListener('input',render));
+</script>
+</body>
+</html>
